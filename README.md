@@ -1,5 +1,7 @@
 [TOC]
 
+# 【reverse】手把手带你基于dll实现SMC
+
 ## 引言
 
 SMC，即self modifying code，自修改代码，逆向入门SMC可以看一下我的[题解](https://www.52pojie.cn/thread-1667202-1-1.html)。我打算实现一个类似于【网鼎杯2020青龙组】jocker的SMC方案。这个方案不需要用到汇编，因此门槛极低。为什么要基于dll呢？因为代码段加密功能是通过外部python脚本完成的，将自修改代码拆分为独立dll实现上更方便。
@@ -7,6 +9,12 @@ SMC，即self modifying code，自修改代码，逆向入门SMC可以看一下�
 仓库：https://github.com/Hans774882968/self-modify-code-hello
 
 编译器：g++8.1.0。
+
+本文juejin：https://juejin.cn/post/7228629361652727845/
+
+本文CSDN：https://blog.csdn.net/hans774882968/article/details/130469189
+
+本文52pojie：https://www.52pojie.cn/thread-1780843-1-1.html
 
 **作者：[hans774882968](https://blog.csdn.net/hans774882968)以及[hans774882968](https://juejin.cn/user/1464964842528888)以及[hans774882968](https://www.52pojie.cn/home.php?mod=space&uid=1906177)**
 

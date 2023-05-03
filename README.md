@@ -182,6 +182,8 @@ int main() {
 }
 ```
 
+值得注意的是，`GetProcAddress`是根据dll的导出表来找到函数地址的，因此我们修改了`can_get_flag`的数据后，依旧能够找到其地址。
+
 用x64dbg动态调试，进入`enc_e.dll`的内存空间，就能看到自修改代码的效果。
 
 ## 基于dll实现多次SMC
@@ -189,6 +191,13 @@ int main() {
 在[这里](https://github.com/pwnslinger/SMC)看到了一道看上去很难的题，它的第一步就是要解密多次SMC。即：解密一段代码后，发现这段代码也是SMC，于是需要继续解密。这就导致你的`IDApython`脚本需要写**递归**，更为复杂。我在这里打算实现一个多次SMC，同样不需要直接操作汇编，门槛极低。~~因为我比较菜~~，所以把这件事分为两步：前期准备、正式实现。前期准备把多次SMC的demo代码写好；正式实现则是参考上述demo代码，使用**模板引擎**来生成所需代码，期望的效果是：在第一次编译`enc.dll`后只需要进行**少量**人工操作就能进行第二次编译。
 
 ### 前期准备
+
+为了实现多次SMC，我们需要考虑更多的问题：
+
+1. 每个SMC函数的起点、终点如何确定。
+2. 有许多函数需要导出，许多函数所在的内存空间要修改为可写……
+
+问题2可以用代码生成技术解决，这就是为什么我选用了**模板引擎**。问题1比较棘手，我采用的可行但粗糙的做法是：让每个SMC函数结构相同，于是它们的大小也都相同。再通过读dll的导出表，来确定每个SMC函数的起点。这样每个SMC函数的起点和终点都可以确定。
 
 操作过程：
 
@@ -385,12 +394,104 @@ if __name__ == '__main__':
 和上一节《实现基于dll的SMC》不同，我改成了使用`pefile`包来进行dll的读写，这样代码会优雅得多。注意点：
 
 1. `pefile`官方文档语焉不详，建议直接看源码，`<py安装路径>\Lib\site-packages\pefile.py`。
-2. 从源码中看到，`peobj.DIRECTORY_ENTRY_EXPORT.symbols`是`ExportData[]`类型，`ExportData`的`address`是`rva`。所以在实现代码的过程中，选用读写API时，挑选入参要求为`rva`的API即可。
+2. 我们需要从导出表读取函数起始地址，这也是为什么需要使用`pefile`包。从源码中看到，`peobj.DIRECTORY_ENTRY_EXPORT.symbols`是`ExportData[]`类型，`ExportData`的`address`就是我们需要的函数起始地址，它是`rva`。所以在实现代码的过程中，选用读写API时，挑选入参要求为`rva`的API即可。
 3. `enc_keys`是为每个SMC函数随机生成的密钥数组，在后文《正式实现》中需要做到自动生成。
 
 ### 正式实现
 
-TODO
+有了前期准备，这一步就是纯体力活了。具体操作：
+
+1. 我们需要使用**模板引擎**，来生成`enc.cpp, enc_dll.py, main.cpp`。这里选择了`jinja2`。记生成代码的文件名为`generate_files.py`，写好代码后运行一下，生成代码。
+2. 编译`enc.h, enc.cpp`，获取`enc.dll`，查看`can_get_flag`和`smc1`的大小，修改`generate_files.py`，再次运行生成代码。接下来再次编译`enc.h, enc.cpp`生成`enc.dll`，然后运行`enc_dll.py`生成`enc_e.dll`。
+3. 最后编译`main.cpp`即可。
+
+相关代码都可以在[这里](https://github.com/Hans774882968/self-modify-code-hello/tree/main/multi_smc)查看。`generate_files.py`
+
+```python
+import jinja2
+import random
+
+SMC_NUM = 100
+sz1 = 0xC9B - 0xA3D
+sz2 = 0xDAA - 0xCB7
+enc_key_obj_list = []
+smc_func_names = []
+smc_func_body_obj_list = []
+
+
+def prepare_data():
+    global smc_func_names
+    for i in range(SMC_NUM + 1):
+        random_enc_key = [random.randint(0, 255) for _ in range(14)]
+        enc_key_obj_list.append({
+            'name': ('smc%s' % i) if i else 'can_get_flag',
+            'enc_key': random_enc_key,
+            'enc_key_str': ', '.join([str(v) for v in random_enc_key])
+        })
+    smc_func_names = ['smc%s' % (i + 1) for i in range(SMC_NUM)]
+    for i in range(SMC_NUM):
+        # gen_main_cpp 用了 enc_key_obj_list[-1]['enc_key_str']，因此不需要再用
+        smc_func_body_obj_list.append({
+            'name': smc_func_names[i],
+            'enc_key_str': enc_key_obj_list[i]['enc_key_str'],
+            'to_decrypt': smc_func_names[i - 1] if i else 'can_get_flag',
+            'to_call': smc_func_names[i - 1] if i else 'internal_func',
+        })
+
+
+def gen_enc_dll_py():
+    fname = 'enc_dll.py.jinja'
+    with open(fname, 'r', encoding='utf-8') as f:
+        template = f.read()
+        t = jinja2.Template(template)
+        code = t.render(
+            sz1=hex(sz1),
+            sz2=hex(sz2),
+            enc_key_obj_list=enc_key_obj_list
+        )
+        with open(fname[:-6], 'w', encoding='utf-8') as res_f:
+            res_f.write(code)
+
+
+def gen_main_cpp():
+    fname = 'main.cpp.jinja'
+    with open(fname, 'r', encoding='utf-8') as f:
+        template = f.read()
+        t = jinja2.Template(template)
+        code = t.render(
+            enc_key_last_str=enc_key_obj_list[-1]['enc_key_str'],
+            smc_func_names=smc_func_names,
+            sz2=hex(sz2)
+        )
+        with open(fname[:-6], 'w', encoding='utf-8') as res_f:
+            res_f.write(code)
+
+
+def gen_enc_cpp():
+    fname = 'enc.cpp.jinja'
+    with open(fname, 'r', encoding='utf-8') as f:
+        template = f.read()
+        t = jinja2.Template(template)
+        code = t.render(
+            smc_func_names=smc_func_names,
+            sz1=hex(sz1),
+            sz2=hex(sz2),
+            smc_func_body_obj_list=smc_func_body_obj_list
+        )
+        with open(fname[:-6], 'w', encoding='utf-8') as res_f:
+            res_f.write(code)
+
+
+def main():
+    prepare_data()
+    gen_enc_dll_py()
+    gen_main_cpp()
+    gen_enc_cpp()
+
+
+if __name__ == '__main__':
+    main()
+```
 
 ## 赏析：更简洁的SMC方案
 

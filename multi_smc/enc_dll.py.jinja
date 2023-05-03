@@ -1,0 +1,38 @@
+import pefile
+
+peobj = pefile.PE('enc.dll')
+
+
+def get_smc_funcs():
+    candidate_funcs = [[symb.name.decode('utf-8'), symb.address] for symb in peobj.DIRECTORY_ENTRY_EXPORT.symbols]
+    smc_funcs = list(filter(lambda x: 'can_get_flag' in x[0] or 'smc' in x[0], candidate_funcs))
+    return smc_funcs
+
+
+enc_keys = {{ '{' }}{% for item in enc_key_obj_list %}
+    '{{ item['name'] }}': {{ item['enc_key'] }},{% endfor %}
+}
+
+
+def enc(st, ed, enc_key):
+    dat = peobj.get_data(st, ed - st + 1)
+    res = bytes([v ^ enc_key[i % len(enc_key)] for i, v in enumerate(dat)])
+    peobj.set_bytes_at_rva(st, res)
+
+
+def main():
+    smc_funcs = get_smc_funcs()
+    print([[f[0], hex(f[1])] for f in smc_funcs])  # dbg
+    sz1 = {{ sz1 }}
+    sz2 = {{ sz2 }}
+    for i, (func_name, st) in enumerate(smc_funcs):
+        ed = st + (sz1 if func_name == 'can_get_flag' else sz2)
+        enc_key = enc_keys[func_name]
+        enc(st, ed, enc_key)
+    res = peobj.write()
+    with open('enc_e.dll', 'wb') as res_f:
+        res_f.write(res)
+
+
+if __name__ == '__main__':
+    main()

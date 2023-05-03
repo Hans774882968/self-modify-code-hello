@@ -1,0 +1,52 @@
+#include "enc.h"
+
+extern "C" __declspec (dllexport) void change_page (void *addr);
+extern "C" __declspec (dllexport) bool can_get_flag (string s);
+{% for smc_func_name in smc_func_names %}extern "C" __declspec (dllexport) void {{ smc_func_name }} (void);
+{% endfor %}
+void internal_func();
+
+void change_page (void *addr) {
+    DWORD old;
+    SYSTEM_INFO si;
+    UINT64 _addr = (UINT64) addr;
+    GetSystemInfo (&si);
+    int page_size = si.dwPageSize;
+    _addr -= (UINT64) addr % page_size;
+
+    if (!VirtualProtect ( (PVOID) _addr, page_size, PAGE_EXECUTE_READWRITE, &old) )
+        printf ("Error: %x\n", GetLastError() );
+
+    return;
+}
+
+bool can_get_flag (string s) {
+    internal_func();
+    const int enc_arr[13] = {67, 91, 48, 88, 80, 75, 41, 93, 116, 92, 33, 83, 68};
+    const int private_key[4] = {43, 56, 68, 62};
+    int n = s.size();
+    if (n < 20) return false;
+    re_ (i, 0, 13) {
+        if ( (s[i] ^ private_key[i % 4]) != enc_arr[i]) return false;
+    }
+    if (s[13] * 2 != 190) return false;
+    if (s[14] * 2 != 218) return false;
+    if (s[15] * 2 != 234) return false;
+    if (s[16] * 2 + 1 != 217) return false;
+    if (s[17] * 2 + 1 != 233) return false;
+    if (s[18] * 3 != 315) return false;
+    if (s[13] + s[19] * 2 + 40 != 385) return false;
+    return true;
+}
+
+void internal_func () {
+    puts ("internal_func");
+}
+
+{% for smc_func_body_obj in smc_func_body_obj_list %}void {{ smc_func_body_obj['name'] }}() {
+    const int enc_key{{ loop.index }}[14] = { {{ smc_func_body_obj['enc_key_str'] }} };
+    uint8 *st = (uint8 *) {{ smc_func_body_obj['to_decrypt'] }}, *ed = (uint8 *) ({{ smc_func_body_obj['to_decrypt'] }}) + {{ sz2 if loop.index0 else sz1 }};
+    for (uint8 *i = st; i <= ed; ++i) *i ^= enc_key{{ loop.index }}[ (i - st) % 14];
+    {{ smc_func_body_obj['to_call'] }}();
+}
+{% endfor %}

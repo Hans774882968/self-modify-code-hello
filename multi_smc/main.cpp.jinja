@@ -1,0 +1,38 @@
+#include <bits/stdc++.h>
+#include <windows.h>
+using namespace std;
+typedef bool (*flag_func) (string);
+typedef void (*cp_func) (void *);
+typedef void (*smc_func) (void);
+typedef unsigned char uint8;
+#define rep(i,a,b) for(int i = (a);i <= (b);++i)
+#define re_(i,a,b) for(int i = (a);i < (b);++i)
+#define dwn(i,a,b) for(int i = (a);i >= (b);--i)
+
+const int enc_key_last[14] = { {{ enc_key_last_str }} };
+
+int main() {
+    HMODULE h = LoadLibrary ("enc_e.dll");
+    // 不知道为什么，必须强转才能过编译
+    flag_func can_get_flag = (flag_func) GetProcAddress (h, "can_get_flag");
+    cp_func change_page = (cp_func) GetProcAddress (h, "change_page");{% for smc_func_name in smc_func_names %}
+    smc_func {{ smc_func_name }} = (smc_func) GetProcAddress (h, "{{ smc_func_name }}");{% endfor %}
+    vector<void *> funcs = { (void *) can_get_flag, {% for smc_func_name in smc_func_names %}(void *) {{ smc_func_name }}, {% endfor %}};
+    for (auto func : funcs) {
+        change_page (func);
+    }
+    // 故意没有把 SMC 解密的代码封装为独立函数
+    uint8 *st = (uint8 *) {{ smc_func_names[-1] }}, *ed = (uint8 *) ({{ smc_func_names[-1] }}) + {{ sz2 }};
+    for (uint8 *i = st; i <= ed; ++i) *i ^= enc_key_last[ (i - st) % 14];
+    {{ smc_func_names[-1] }}();
+
+    puts ("Input flag:");
+    string inp;
+    cin >> inp;
+    if (can_get_flag (inp) ) {
+        cout << "Congratulations! Your flag: " << inp << endl;
+    } else {
+        puts ("Incorrect flag");
+    }
+    return 0;
+}

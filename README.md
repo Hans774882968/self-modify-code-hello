@@ -493,6 +493,314 @@ if __name__ == '__main__':
     main()
 ```
 
+## 基于链接脚本+自定义section实现SMC
+
+### 前期准备
+
+我们知道：
+
+1. 链接脚本可以在链接过程为exe提供数据，比如：一个段的起始地址和末尾地址。
+2. `g++`允许我们用`__attribute__ ( (section (".acmer1") ) )`将变量或函数声明到一个自定义的段。
+
+所以我们可以设计一个动态调用函数的方案，来增大逆向难度，灵感来自[参考链接3](https://blog.csdn.net/nyist327/article/details/59481809)。核心代码如下：
+
+```cpp
+typedef void (*smc_call_type) (void);
+typedef unsigned char uint8;
+
+extern smc_call_type __my_smc_call_start;
+extern smc_call_type __my_smc_call_end;
+
+#define __func_section __attribute__ ( (section (".acmer1") ) )
+#define func_ptr_init(func) __attribute__ ( (section (".acmer2") ) ) smc_call_type _fn_##func = func;
+
+__func_section void smc1() {
+    change_page ( (void *) can_get_flag);
+    const int enc_key1[14] = { 107, 50, 142, 41, 124, 82, 115, 38, 3, 94, 141, 186, 254, 226 };
+    uint8 *st = (uint8 *) can_get_flag, *ed = (uint8 *) (can_get_flag) + 0x328;
+    for (uint8 *i = st; i <= ed; ++i) *i ^= enc_key1[ (i - st) % 14];
+}
+
+__func_section void smc2() {/* 函数体略 */}
+
+func_ptr_init (smc1);
+func_ptr_init (smc2);
+```
+
+这段代码：
+
+1. 声明了由链接脚本提供的数据`__my_smc_call_start`和`__my_smc_call_end`。
+2. 定义了在`.acmer2`段的函数指针`_fn_smc1, _fn_smc2`和在`.acmer1`段的函数`smc1, smc2`，前者指向后者。
+3. 调用方式：`(* (&__my_smc_call_start + i) ) ();`，`&__my_smc_call_start + i`表示在`.acmer2`段取址，获得的是指向函数指针的指针，取一次值，就得到了函数指针。
+
+`main.cpp`完整代码：
+
+```cpp
+#include <bits/stdc++.h>
+#include <windows.h>
+using namespace std;
+typedef void (*smc_call_type) (void);
+typedef unsigned char uint8;
+#define rep(i,a,b) for(int i = (a);i <= (b);++i)
+#define re_(i,a,b) for(int i = (a);i < (b);++i)
+#define dwn(i,a,b) for(int i = (a);i >= (b);--i)
+
+extern smc_call_type __my_smc_call_start;
+extern smc_call_type __my_smc_call_end;
+
+#define __func_section __attribute__ ( (section (".acmer1") ) )
+#define func_ptr_init(func) __attribute__ ( (section (".acmer2") ) ) smc_call_type _fn_##func = func;
+
+const int enc_key5[14] = {16, 113, 174, 24, 78, 9, 90, 95, 207, 146, 136, 125, 69, 203};
+
+void change_page (void *addr) {
+    DWORD old;
+    SYSTEM_INFO si;
+    UINT64 _addr = (UINT64) addr;
+    GetSystemInfo (&si);
+    int page_size = si.dwPageSize;
+    _addr -= (UINT64) addr % page_size;
+
+    if (!VirtualProtect ( (PVOID) _addr, page_size, PAGE_EXECUTE_READWRITE, &old) )
+        printf ("Error: %x\n", GetLastError() );
+
+    return;
+}
+
+void can_get_flag() {
+    puts ("Input flag:");
+    string inp;
+    cin >> inp;
+
+    bool fl = true;
+    int n = inp.size();
+    const int enc_arr[28] = {233, 240, 201, 197, 244, 173, 193, 204, 228, 195, 197, 215, 190, 232, 193, 253, 188, 241, 203, 253, 235, 249, 197, 146, 208, 254, 209, 253};
+    const int private_key[4] = {143, 156, 168, 162};
+    if (n < 35) fl = false;
+    re_ (i, 0, 28) {
+        if ( (inp[i] ^ private_key[i % 4]) != enc_arr[i]) fl = false;
+    }
+    if (inp[28] * 2 != 102) fl = false;
+    if (inp[29] * 2 != 198) fl = false;
+    if (inp[30] * 2 != 234) fl = false;
+    if (inp[31] * 2 + 1 != 199) fl = false;
+    if (inp[32] * 2 + 1 != 233) fl = false;
+    if (inp[33] * 3 + 1 != 307) fl = false;
+    if (inp[34] + 40 != 165) fl = false;
+
+    if (fl) {
+        cout << "Congratulations! Your flag: " << inp << endl;
+    } else {
+        puts ("Incorrect flag");
+    }
+}
+
+__func_section void null_fn() {}
+
+__func_section void smc1() {
+    change_page ( (void *) can_get_flag);
+    const int enc_key1[14] = { 107, 50, 142, 41, 124, 82, 115, 38, 3, 94, 141, 186, 254, 226 };
+    uint8 *st = (uint8 *) can_get_flag, *ed = (uint8 *) (can_get_flag) + 0x328;
+    for (uint8 *i = st; i <= ed; ++i) *i ^= enc_key1[ (i - st) % 14];
+}
+
+__func_section void smc2() {
+    const int enc_key2[14] = { 68, 41, 223, 212, 96, 89, 4, 193, 75, 254, 194, 112, 62, 7 };
+    uint8 *st = (uint8 *) (* (&__my_smc_call_start + 1) ), *ed = (uint8 *) (* (&__my_smc_call_start + 1) ) + 0xfa;
+    for (uint8 *i = st; i <= ed; ++i) *i ^= enc_key2[ (i - st) % 14];
+    (* (&__my_smc_call_start + 1) ) ();
+}
+
+__func_section void smc3() {
+    const int enc_key3[14] = { 129, 50, 171, 174, 220, 135, 228, 185, 10, 41, 190, 89, 84, 253 };
+    uint8 *st = (uint8 *) (* (&__my_smc_call_start + 2) ), *ed = (uint8 *) (* (&__my_smc_call_start + 2) ) + 0x10F;
+    for (uint8 *i = st; i <= ed; ++i) *i ^= enc_key3[ (i - st) % 14];
+    (* (&__my_smc_call_start + 2) ) ();
+}
+
+__func_section void smc4() {
+    const int enc_key4[14] = { 58, 137, 226, 153, 117, 216, 152, 29, 210, 117, 161, 16, 131, 126 };
+    uint8 *st = (uint8 *) (* (&__my_smc_call_start + 3) ), *ed = (uint8 *) (* (&__my_smc_call_start + 3) ) + 0x10F;
+    for (uint8 *i = st; i <= ed; ++i) *i ^= enc_key4[ (i - st) % 14];
+    (* (&__my_smc_call_start + 3) ) ();
+}
+
+func_ptr_init (null_fn);
+func_ptr_init (smc1);
+func_ptr_init (smc2);
+func_ptr_init (smc3);
+func_ptr_init (smc4);
+
+int main() {
+    // 故意没有把 SMC 解密的代码封装为独立函数
+    uint8 *st = (uint8 *) (* (&__my_smc_call_start + 4) ), *ed = (uint8 *) (* (&__my_smc_call_start + 4) ) + 0x10F;
+    change_page (st); // .acmer1 块只有函数定义，所以编译结果默认是只读的
+    for (uint8 *i = st; i <= ed; ++i) *i ^= enc_key5[ (i - st) % 14];
+    (* (&__my_smc_call_start + 4) ) ();
+
+    can_get_flag();
+    return 0;
+}
+```
+
+`smc1`是最后一个smc函数，那么为什么`smc1`没有像之前《基于dll实现多次SMC》一样调用`null_fn`呢？我遗憾地发现，因为`g++`编译器的优化，`(* (&__my_smc_call_start + 0) ) ();`生成的指令长度和`(* (&__my_smc_call_start + 1) ) ();`是不一样的，所以我们索性就允许这段代码出现3种指令长度，不妨命名为`sz_can_get_flag, sz_smc1, sz_other_smc`。
+
+我们先用`ld --verbose`命令，导出`g++`使用的默认链接脚本。然后在定义`.bss`段的代码：
+
+```
+  .bss BLOCK(__section_alignment__) :
+  {
+    __bss_start__ = . ;
+    *(.bss)
+    *(COMMON)
+    __bss_end__ = . ;
+  }
+```
+
+之前添加自定义段的代码：
+
+```lds
+  .acmer1 BLOCK(__section_alignment__) : {*(.acmer1)}
+  .acmer2 BLOCK(__section_alignment__) :
+  {
+    __my_smc_call_start = . ;
+    *(.acmer2)
+    __my_smc_call_end = . ;
+  }
+```
+
+于是`&__my_smc_call_start`表示`.acmer2`段的起始地址。
+
+编译命令：
+
+```bash
+g++ main.cpp -g -T main.lds -o main.exe
+```
+
+编译后和之前一样，只需要运行加密脚本对PE文件相关函数进行加密。
+
+和之前章节不同，我将加密脚本拆成了两个文件`enc_exe.py, enc_exe_utils.py`，其中`enc_exe_utils.py`是不需要动态生成代码的部分，这不仅是为了clean code，也是在为后文使用模板引擎生成代码做准备。相比于《基于dll实现多次SMC》，我们需要多面对一个问题：如何方便地获取函数地址？
+
+基于`dll`时，我们可以直接用导出表来读取，基于`exe`则只能通过**符号表**来读取。在命令行，可以用`nm -C main.exe`来获取符号表，但查阅咕果、chatgpt后我认为目前并没有一个能方便地读取PE文件符号表的python包。那么只能自己动手实现了！我们可以观察到`nm -C`的输出有3列：符号地址、符号类型和符号名，其中“符号地址”是虚拟地址VA，为了对接`pefile`包需要先转为相对虚拟地址RVA。我实现的相关函数：`read_symbol_table`。
+
+`enc_exe.py`
+
+```python
+import pefile
+from enc_exe_utils import get_smc_funcs, enc, get_output_file_name, run_strip
+
+input_file_name = 'main.exe'
+peobj = pefile.PE(input_file_name)
+should_run_strip = False
+
+
+enc_keys = {
+    'can_get_flag': [107, 50, 142, 41, 124, 82, 115, 38, 3, 94, 141, 186, 254, 226],
+    'smc1': [68, 41, 223, 212, 96, 89, 4, 193, 75, 254, 194, 112, 62, 7],
+    'smc2': [129, 50, 171, 174, 220, 135, 228, 185, 10, 41, 190, 89, 84, 253],
+    'smc3': [58, 137, 226, 153, 117, 216, 152, 29, 210, 117, 161, 16, 131, 126],
+    'smc4': [16, 113, 174, 24, 78, 9, 90, 95, 207, 146, 136, 125, 69, 203]
+}
+
+
+def main():
+    smc_funcs = get_smc_funcs(input_file_name, peobj)
+    print([[f[0], hex(f[1])] for f in smc_funcs])  # dbg
+    sz_can_get_flag = 0x328
+    sz_smc1 = 0xfa
+    sz_other_smc = 0x10F
+    for i, (func_name, st) in enumerate(smc_funcs):
+        ed = st + (sz_can_get_flag if func_name == 'can_get_flag' else (sz_smc1 if func_name == 'smc1' else sz_other_smc))
+        enc_key = enc_keys[func_name]
+        enc(st, ed, enc_key, peobj)
+    res = peobj.write()
+    output_file_name = get_output_file_name(input_file_name, '-enc')
+    with open(output_file_name, 'wb') as res_f:
+        res_f.write(res)
+    if should_run_strip:
+        run_strip(output_file_name)
+
+
+if __name__ == '__main__':
+    main()
+```
+
+`enc_exe_utils.py`
+
+```python
+import pefile
+import subprocess
+import os
+
+
+def read_symbol_table(input_file_name, peobj=None):
+    if not peobj:
+        peobj = pefile.PE(input_file_name)
+    p = subprocess.Popen(
+        ['nm', '-C', input_file_name],
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        encoding='utf-8'
+    )
+    shell_output = p.communicate()[0]
+    shell_output_arr = shell_output.split('\n')
+    symbol_table = {}
+    symbol_arr = []
+    for ln in shell_output_arr:
+        ln_arr = ln.split(' ')
+        if len(ln_arr) < 3:
+            continue
+        [symbol_val, symbol_type, *rest] = ln_arr
+        symbol_name = ' '.join(rest)
+        symbol_table[symbol_name] = symbol_val
+        symbol_arr.append((symbol_val, symbol_type, symbol_name))
+    return symbol_table, symbol_arr
+
+
+def get_smc_funcs(input_file_name, peobj=None):
+    def remove_brackets(s):
+        idx = s.find('(')
+        return s if idx == -1 else s[:idx]
+    symbol_table, symbol_arr = read_symbol_table(input_file_name, peobj)
+
+    def str_va_to_rva(str_addr):
+        return int(str_addr, 16) - peobj.OPTIONAL_HEADER.ImageBase
+    smc_funcs = list(map(
+        lambda x: (remove_brackets(x[2]), str_va_to_rva(x[0])),
+        filter(lambda x: x[2] == 'can_get_flag()' or x[2].startswith('smc'), symbol_arr)
+    ))
+    return smc_funcs
+
+
+def enc(st, ed, enc_key, peobj):
+    dat = peobj.get_data(st, ed - st + 1)
+    res = bytes([v ^ enc_key[i % len(enc_key)] for i, v in enumerate(dat)])
+    peobj.set_bytes_at_rva(st, res)
+
+
+def get_output_file_name(input_file_name, add_suffix=''):
+    fname, extname = os.path.splitext(os.path.basename(input_file_name))
+    return fname + add_suffix + extname
+
+
+def run_strip(file_name):
+    p = subprocess.Popen(
+        ['strip', file_name],
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        encoding='utf-8'
+    )
+
+
+if __name__ == '__main__':
+    input_file_name = 'main.exe'
+    print(get_output_file_name(input_file_name, '_enc'))
+```
+
+flag：`flag{1ink_mu1ti_3mc_dem0_by_3cuctf}`
+
 ## 赏析：更简洁的SMC方案
 
 在[GitHub](https://github.com/marcusbotacin/Self-Modifying-Code/blob/master/Examples/SMC2.cpp)看到的一种很简洁的SMC方案。原理很简单：在运行时修改一个函数（在这个例子中是`malicious`）的函数体，使得一个变量的初值改变，从而随心所欲地控制函数走向的分支。可以往上添加反调试逻辑，就体现了这种随心所欲。具体实现如下：
@@ -613,3 +921,4 @@ int main() {
 
 1. https://www.cnblogs.com/rixiang/p/8954822.html
 2. https://www.cygwin.com/cygwin-ug-net/dll.html
+3. gcc的__attribute__编译属性有很多子项，用于改变作用对象的特性。这里讨论section子项的作用：https://blog.csdn.net/nyist327/article/details/59481809
